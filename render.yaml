@@ -1,0 +1,22 @@
+# Render Blueprint (optional): set repo + tune env in the dashboard.
+# For a monorepo, point the service Root Directory to `backend`.
+#
+# Docs: https://render.com/docs/blueprint-spec
+
+services:
+  - type: web
+    name: ai-task-manager-api
+    runtime: node
+    region: oregon
+    plan: starter
+    rootDir: backend
+    buildCommand: npm ci && npx prisma generate && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "20"
+      # Set in dashboard: DATABASE_URL, JWT_SECRET, FRONTEND_URL (and OPENAI_API_KEY if used)
+      # PORT is provided automatically by Render
