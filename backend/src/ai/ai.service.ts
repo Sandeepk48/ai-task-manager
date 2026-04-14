@@ -37,9 +37,16 @@ export class AiService {
 
     const apiKey = this.resolveOpenAiApiKey();
     if (!apiKey) {
-      this.logger.warn(
-        'OPENAI_API_KEY is empty at runtime (check Render Web Service env + redeploy).',
-      );
+      const raw = process.env.OPENAI_API_KEY;
+      if (raw !== undefined && String(raw).trim() === '') {
+        this.logger.warn(
+          'OPENAI_API_KEY is set but empty (often OPENAI_API_KEY="" in .env). Remove the line or set a real sk-… key.',
+        );
+      } else {
+        this.logger.warn(
+          'OPENAI_API_KEY is empty at runtime (check Render Web Service env + redeploy, or backend/.env for local dev).',
+        );
+      }
       return this.fallbackSuggestion(title, description, 'missing_key');
     }
 

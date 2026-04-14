@@ -26,6 +26,8 @@ npm install
 npx prisma migrate dev  
 npm run start:dev  
 
+For **AI summaries** when using `NEXT_PUBLIC_API_URL=http://localhost:4000`, set **`OPENAI_API_KEY`** in `backend/.env` to a real key. Do not leave `OPENAI_API_KEY=""` in that file — an empty value is loaded into the process and disables AI even if Render has a key.
+
 ### Frontend
 cd frontend  
 npm install  
