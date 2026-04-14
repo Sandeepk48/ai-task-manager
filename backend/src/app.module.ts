@@ -10,7 +10,12 @@ import { AiModule } from './ai/ai.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      // On Render/Railway, secrets live in process.env. Ignore .env file in
+      // production so a stale committed template cannot shadow real env vars.
+      ignoreEnvFile: process.env.NODE_ENV === 'production',
+    }),
     PrismaModule,
     UsersModule,
     AuthModule,

@@ -30,10 +30,10 @@ export class AiService {
       return this.fallbackSuggestion(title, description);
     }
 
-    const apiKey = this.config.get<string>('OPENAI_API_KEY');
+    const apiKey = this.resolveOpenAiApiKey();
     if (!apiKey) {
       this.logger.warn(
-        'OPENAI_API_KEY is not set; using placeholder summary and priority.',
+        'OPENAI_API_KEY is empty or missing; using placeholder summary.',
       );
       return this.fallbackSuggestion(title, description);
     }
@@ -51,8 +51,11 @@ export class AiService {
           {
             role: 'system',
             content: `You analyze task descriptions. Given a task's description (and optionally its title), respond with JSON only:
-{"summary": string (1-3 short sentences capturing the essence of the work), "suggestedPriority": "LOW" | "MEDIUM" | "HIGH"}
-Use LOW for low urgency or nice-to-have work, MEDIUM for standard work, HIGH for urgent, risky, or time-sensitive work.`,
+{"summary": string (1-3 short sentences), "suggestedPriority": "LOW" | "MEDIUM" | "HIGH"}
+
+Rules:
+- The summary must paraphrase and compress the work. Do NOT copy the description verbatim or paste long phrases unchanged.
+- Use LOW for low urgency or nice-to-have work, MEDIUM for standard work, HIGH for urgent, risky, or time-sensitive work.`,
           },
           { role: 'user', content: userContent },
         ],
@@ -76,16 +79,55 @@ Use LOW for low urgency or nice-to-have work, MEDIUM for standard work, HIGH for
       const suggestedPriority = this.normalizePriority(
         parsed.suggestedPriority,
       );
+      let summary = parsed.summary?.trim();
+      if (!summary) {
+        summary = this.paraphraseStub(title, description);
+      } else if (this.summaryEchoesDescription(summary, description)) {
+        this.logger.warn(
+          'OpenAI summary matched description too closely; using condensed stub.',
+        );
+        summary = this.paraphraseStub(title, description);
+      }
       return {
-        summary:
-          parsed.summary?.trim() ||
-          this.defaultSummary(title, description),
+        summary,
         suggestedPriority,
       };
     } catch (error) {
-      this.logger.error('OpenAI request failed', error);
+      this.logOpenAiFailure(error);
       return this.fallbackSuggestion(title, description);
     }
+  }
+
+  /** ConfigService + process.env; trim whitespace and strip accidental quotes. */
+  private resolveOpenAiApiKey(): string {
+    const raw =
+      this.config.get<string>('OPENAI_API_KEY') ?? process.env.OPENAI_API_KEY;
+    if (raw == null) {
+      return '';
+    }
+    let v = String(raw).trim();
+    if (
+      (v.startsWith('"') && v.endsWith('"')) ||
+      (v.startsWith("'") && v.endsWith("'"))
+    ) {
+      v = v.slice(1, -1).trim();
+    }
+    return v;
+  }
+
+  private logOpenAiFailure(error: unknown): void {
+    if (error && typeof error === 'object' && 'status' in error) {
+      const status = (error as { status?: number }).status;
+      const msg =
+        error instanceof Error ? error.message : JSON.stringify(error);
+      this.logger.error(`OpenAI API error (HTTP ${status ?? '?'}): ${msg}`);
+      return;
+    }
+    if (error instanceof Error) {
+      this.logger.error(`OpenAI request failed: ${error.message}`, error.stack);
+      return;
+    }
+    this.logger.error('OpenAI request failed', error);
   }
 
   private buildUserContent(description: string, title: string): string {
@@ -115,20 +157,42 @@ Use LOW for low urgency or nice-to-have work, MEDIUM for standard work, HIGH for
     description: string,
   ): TaskAiSuggestion {
     return {
-      summary: this.defaultSummary(title, description),
+      summary: this.unavailableSummary(title, description),
       suggestedPriority: TaskPriority.MEDIUM,
     };
   }
 
-  private defaultSummary(title: string, description: string) {
-    if (description.length > 0) {
-      return description.length > 280
-        ? `${description.slice(0, 277)}...`
-        : description;
+  /** When AI is off or failed: clear message — never duplicate the full description into aiSummary. */
+  private unavailableSummary(title: string, description: string): string {
+    const t = title.trim() || 'This task';
+    const hasDesc = description.trim().length > 0;
+    const base =
+      'AI summary is unavailable. On the API host, set a valid OPENAI_API_KEY (and check billing/limits). ' +
+      'The full text you entered stays in the Description field.';
+    if (hasDesc) {
+      return `${base} Working title: “${t}”.`;
     }
-    if (title.length > 0) {
-      return `Task "${title}" (no description provided).`;
+    return `${base} Working title: “${t}” (no description yet).`;
+  }
+
+  private summaryEchoesDescription(summary: string, description: string): boolean {
+    const s = summary.trim();
+    const d = description.trim();
+    if (!s || !d) return false;
+    if (s === d) return true;
+    if (d.length >= 40 && s.includes(d.slice(0, Math.min(40, d.length)))) {
+      return true;
     }
-    return 'No task details were provided.';
+    return false;
+  }
+
+  /** Short non-echoing line when the model parrots the description. */
+  private paraphraseStub(title: string, description: string): string {
+    const t = title.trim() || 'This task';
+    const words = description.trim().split(/\s+/).filter(Boolean).slice(0, 8);
+    const teaser = words.length ? words.join(' ') + (description.trim().split(/\s+/).length > 8 ? '…' : '') : '';
+    return teaser
+      ? `Summary: “${t}” — touches on: ${teaser}. (Condensed; configure OpenAI for a richer summary.)`
+      : `Summary: “${t}”. (Configure OpenAI for a generated summary.)`;
   }
 }
