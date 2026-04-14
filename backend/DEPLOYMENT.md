@@ -15,6 +15,8 @@ This service uses **PostgreSQL** (via Prisma), **JWT auth**, and **CORS** for yo
 | `JWT_EXPIRES_IN` | No | JWT lifetime (default `7d`). |
 | `OPENAI_API_KEY` | No | **Required for real AI summaries** on new tasks. If unset, `aiSummary` explains that the key is missing (it will not duplicate your description). |
 
+After deploy, open **`GET /health`**: the JSON field **`openaiConfigured`** is `true` only when the running process sees a non-empty `OPENAI_API_KEY` (same logic as task AI). If it is `false`, the secret is missing on that Web Service or the service was not redeployed after saving env.
+
 Production startup **fails fast** if `DATABASE_URL`, `JWT_SECRET`, or CORS configuration is missing.
 
 ## PostgreSQL (cloud)

@@ -14,6 +14,11 @@ export class AiService {
 
   constructor(private readonly config: ConfigService) {}
 
+  /** True when a non-empty key is visible at runtime (same rules as analyze). */
+  hasOpenAiApiKey(): boolean {
+    return this.resolveOpenAiApiKey().length > 0;
+  }
+
   /**
    * Uses the task description (and optional title for context) to produce
    * a short summary and a suggested priority (LOW / MEDIUM / HIGH).
@@ -27,15 +32,15 @@ export class AiService {
 
     const userContent = this.buildUserContent(description, title);
     if (!userContent) {
-      return this.fallbackSuggestion(title, description);
+      return this.fallbackSuggestion(title, description, 'missing_key');
     }
 
     const apiKey = this.resolveOpenAiApiKey();
     if (!apiKey) {
       this.logger.warn(
-        'OPENAI_API_KEY is empty or missing; using placeholder summary.',
+        'OPENAI_API_KEY is empty at runtime (check Render Web Service env + redeploy).',
       );
-      return this.fallbackSuggestion(title, description);
+      return this.fallbackSuggestion(title, description, 'missing_key');
     }
 
     const client = new OpenAI({ apiKey });
@@ -63,7 +68,8 @@ Rules:
 
       const raw = completion.choices[0]?.message?.content;
       if (!raw) {
-        return this.fallbackSuggestion(title, description);
+        this.logger.warn('OpenAI returned empty message content');
+        return this.fallbackSuggestion(title, description, 'bad_response');
       }
 
       let parsed: { summary?: string; suggestedPriority?: string };
@@ -73,7 +79,8 @@ Rules:
           suggestedPriority?: string;
         };
       } catch {
-        return this.fallbackSuggestion(title, description);
+        this.logger.warn(`OpenAI returned non-JSON body: ${raw.slice(0, 200)}`);
+        return this.fallbackSuggestion(title, description, 'bad_response');
       }
 
       const suggestedPriority = this.normalizePriority(
@@ -94,14 +101,17 @@ Rules:
       };
     } catch (error) {
       this.logOpenAiFailure(error);
-      return this.fallbackSuggestion(title, description);
+      return this.fallbackSuggestion(title, description, 'openai_error');
     }
   }
 
-  /** ConfigService + process.env; trim whitespace and strip accidental quotes. */
+  /**
+   * Render injects secrets into process.env — prefer that, then ConfigService.
+   */
   private resolveOpenAiApiKey(): string {
     const raw =
-      this.config.get<string>('OPENAI_API_KEY') ?? process.env.OPENAI_API_KEY;
+      process.env.OPENAI_API_KEY ??
+      this.config.get<string>('OPENAI_API_KEY');
     if (raw == null) {
       return '';
     }
@@ -155,11 +165,35 @@ Rules:
   private fallbackSuggestion(
     title: string,
     description: string,
+    reason: 'missing_key' | 'openai_error' | 'bad_response',
   ): TaskAiSuggestion {
+    const summary =
+      reason === 'missing_key'
+        ? this.unavailableSummary(title, description)
+        : reason === 'openai_error'
+          ? this.openAiErrorUserMessage(title)
+          : this.openAiBadResponseUserMessage(title);
     return {
-      summary: this.unavailableSummary(title, description),
+      summary,
       suggestedPriority: TaskPriority.MEDIUM,
     };
+  }
+
+  private openAiErrorUserMessage(title: string): string {
+    const t = title.trim() || 'This task';
+    return (
+      `OpenAI request failed from the API server (auth, billing, rate limit, or network). ` +
+      `Check Render Logs for lines containing "OpenAI API error". ` +
+      `The API key is present but the call did not succeed. Task: “${t}”.`
+    );
+  }
+
+  private openAiBadResponseUserMessage(title: string): string {
+    const t = title.trim() || 'This task';
+    return (
+      `OpenAI returned an unexpected response (empty or non-JSON). ` +
+      `Check Render logs. Task: “${t}”.`
+    );
   }
 
   /** When AI is off or failed: clear message — never duplicate the full description into aiSummary. */
